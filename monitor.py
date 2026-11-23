@@ -10,43 +10,59 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://www.cineq.co.kr"
 
+SEAT_URL = BASE_URL + "/Popup/SeatChoiceSeatMap"
+
 STATE_FILE = "seat_state.json"
 
 SHOWTIMES = [
 
-    # SUITE 7관 - 30석
+    {"id": "1117312", "hall": "SUITE 7관", "time": "10:55", "count": 30},
 
-    {"hall": "SUITE 7관", "time": "10:55~12:41", "id": "1117312", "expected": 30},
+    {"id": "1117313", "hall": "SUITE 7관", "time": "13:05", "count": 30},
 
-    {"hall": "SUITE 7관", "time": "13:05~14:51", "id": "1117313", "expected": 30},
+    {"id": "1117317", "hall": "SUITE 7관", "time": "15:15", "count": 30},
 
-    {"hall": "SUITE 7관", "time": "15:15~17:01", "id": "1117317", "expected": 30},
+    {"id": "1117318", "hall": "SUITE 7관", "time": "17:25", "count": 30},
 
-    {"hall": "SUITE 7관", "time": "17:25~19:11", "id": "1117318", "expected": 30},
+    {"id": "1117316", "hall": "SUITE 7관", "time": "19:35", "count": 30},
 
-    {"hall": "SUITE 7관", "time": "19:35~21:21", "id": "1117316", "expected": 30},
+    {"id": "1117300", "hall": "RESERVE 5관", "time": "10:00", "count": 69},
 
-    # RESERVE 5관 - 69석
+    {"id": "1117301", "hall": "RESERVE 5관", "time": "12:10", "count": 69},
 
-    {"hall": "RESERVE 5관", "time": "10:00~11:46", "id": "1117300", "expected": 69},
+    {"id": "1117302", "hall": "RESERVE 5관", "time": "14:20", "count": 69},
 
-    {"hall": "RESERVE 5관", "time": "12:10~13:56", "id": "1117301", "expected": 69},
+    {"id": "1117303", "hall": "RESERVE 5관", "time": "16:30", "count": 69},
 
-    {"hall": "RESERVE 5관", "time": "14:20~16:06", "id": "1117302", "expected": 69},
-
-    {"hall": "RESERVE 5관", "time": "16:30~18:16", "id": "1117303", "expected": 69},
-
-    {"hall": "RESERVE 5관", "time": "21:15~23:01", "id": "1117305", "expected": 69},
+    {"id": "1117305", "hall": "RESERVE 5관", "time": "21:15", "count": 69},
 
 ]
 
-def get_seats(session, plan_id, expected):
+def load_state():
+
+    if not os.path.exists(STATE_FILE):
+
+        return {}
+
+    try:
+
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+
+            data = json.load(f)
+
+            return data if isinstance(data, dict) else {}
+
+    except (json.JSONDecodeError, OSError):
+
+        return {}
+
+def get_available_seats(session, showtime):
 
     response = session.post(
 
-        f"{BASE_URL}/Popup/SeatChoiceSeatMap",
+        SEAT_URL,
 
-        data={"screenPlanId": plan_id},
+        data={"screenPlanId": showtime["id"]},
 
         timeout=30
 
@@ -56,47 +72,71 @@ def get_seats(session, plan_id, expected):
 
     soup = BeautifulSoup(response.text, "html.parser")
 
-    elements = soup.select("input.choose-seat")
+    seats = soup.select("input.choose-seat")
 
-    if len(elements) != expected:
+    if not seats:
 
         raise RuntimeError(
 
-            f"{plan_id}: 예상 {expected}석, 실제 {len(elements)}석"
+            f"{showtime['hall']} {showtime['time']}: "
+
+            "좌석 정보를 찾지 못했습니다."
 
         )
 
-    seats = {}
+    if len(seats) != showtime["count"]:
 
-    for seat in elements:
+        raise RuntimeError(
 
-        seat_id = seat.get("id")
+            f"{showtime['hall']} {showtime['time']}: "
 
-        if not seat_id or seat_id in seats:
+            f"예상 좌석 {showtime['count']}개, "
 
-            raise RuntimeError(f"{plan_id}: 좌석 ID 오류")
+            f"실제 확인 {len(seats)}개. 상태 저장을 중단합니다."
+
+        )
+
+    available = set()
+
+    for seat in seats:
+
+        seat_id = seat.get("id") or seat.get("value")
+
+        if not seat_id:
+
+            continue
+
+        classes = seat.get("class", [])
 
         unavailable = (
 
-            "disabled" in seat.get("class", [])
+            "disabled" in classes
 
             or seat.has_attr("disabled")
 
         )
 
-        seats[seat_id] = not unavailable
+        if not unavailable:
 
-    return seats
+            available.add(seat_id)
+
+    return available
 
 def send_telegram(message):
 
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+
+        raise RuntimeError("텔레그램 환경변수가 설정되지 않았습니다.")
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
 
     response = requests.post(
 
-        f"https://api.telegram.org/bot{token}/sendMessage",
+        url,
 
         data={
 
@@ -106,15 +146,17 @@ def send_telegram(message):
 
         },
 
-        timeout=20
+        timeout=30
 
     )
 
     response.raise_for_status()
 
-    if not response.json().get("ok"):
+    result = response.json()
 
-        raise RuntimeError("텔레그램 전송 실패")
+    if not result.get("ok"):
+
+        raise RuntimeError(f"텔레그램 전송 실패: {result}")
 
 def main():
 
@@ -124,103 +166,79 @@ def main():
 
         "User-Agent": (
 
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 "
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 
-            "like Mac OS X) AppleWebKit/605.1.15 "
-
-            "(KHTML, like Gecko) Version/17.0 "
-
-            "Mobile/15E148 Safari/604.1"
+            "AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
 
         ),
 
-        "Referer": "https://www.cineq.co.kr/",
+        "Referer": BASE_URL + "/",
 
-        "Origin": "https://www.cineq.co.kr"
+        "Origin": BASE_URL,
+
+        "X-Requested-With": "XMLHttpRequest"
 
     })
 
-    # 홈페이지 접속으로 세션 쿠키 확보
+    homepage = session.get(BASE_URL, timeout=30)
 
-    home = session.get(BASE_URL, timeout=30)
+    homepage.raise_for_status()
 
-    home.raise_for_status()
+    previous_state = load_state()
 
-    previous = {}
-
-    if os.path.exists(STATE_FILE):
-
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-
-            previous = json.load(f)
-
-    current = {}
+    current_state = {}
 
     alerts = []
 
-    for show in SHOWTIMES:
+    for showtime in SHOWTIMES:
 
-        plan_id = show["id"]
+        available = get_available_seats(session, showtime)
 
-        seats = get_seats(
+        key = showtime["id"]
 
-            session,
+        old_seats = previous_state.get(key)
 
-            plan_id,
+        # 최초 확인은 기준 좌석 상태만 저장하고 알림하지 않음
 
-            show["expected"]
+        if isinstance(old_seats, list):
+
+            newly_available = available - set(old_seats)
+
+            if newly_available:
+
+                seat_text = ", ".join(sorted(newly_available))
+
+                alerts.append(
+
+                    "🎬 치이카와 신규 취소 좌석!\n\n"
+
+                    f"극장: 씨네Q 신도림\n"
+
+                    f"상영관: {showtime['hall']}\n"
+
+                    f"시간: {showtime['time']}\n"
+
+                    f"좌석: {seat_text}"
+
+                )
+
+        current_state[key] = sorted(available)
+
+        print(
+
+            f"{showtime['hall']} {showtime['time']}: "
+
+            f"예약 가능 {len(available)}석"
 
         )
 
-        current[plan_id] = seats
-
-        old_seats = previous.get(plan_id)
-
-        # 첫 실행은 기준값만 저장하고 알림하지 않음
-
-        if old_seats is None:
-
-            continue
-
-        # 매진 -> 예매 가능으로 바뀐 좌석만 감지
-
-        opened = [
-
-            seat_id
-
-            for seat_id, available in seats.items()
-
-            if available and not old_seats.get(seat_id, False)
-
-        ]
-
-        if opened:
-
-            alerts.append(
-
-                "🎬 치이카와 취소석 발생!\n"
-
-                f"상영관: {show['hall']}\n"
-
-                f"시간: {show['time']}\n"
-
-                f"좌석: {', '.join(opened)}"
-
-            )
-
-    # 알림 전송
-
-    for alert in alerts:
-
-        send_telegram(alert)
-
-    # 모든 회차 조회가 성공한 뒤 상태 저장
+    # 모든 회차 조회가 성공한 경우에만 상태 저장
 
     with open(STATE_FILE, "w", encoding="utf-8") as f:
 
         json.dump(
 
-            current,
+            current_state,
 
             f,
 
@@ -230,11 +248,11 @@ def main():
 
         )
 
-    print(f"감시 완료: {len(current)}개 회차")
+    for alert in alerts:
 
-    print(f"감시 좌석: {sum(len(v) for v in current.values())}석")
+        send_telegram(alert)
 
-    print(f"신규 취소석 알림: {len(alerts)}건")
+    print("좌석 감시 완료")
 
 if __name__ == "__main__":
 
