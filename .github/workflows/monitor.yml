@@ -1,8 +1,6 @@
-
-
 name: CineQ Seat Monitor
 
-on:
+'on':
 
   schedule:
 
