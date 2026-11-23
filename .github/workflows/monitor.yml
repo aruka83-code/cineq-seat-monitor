@@ -2,11 +2,11 @@ name: CineQ Seat Monitor
 
 on:
 
+  workflow_dispatch:
+
   schedule:
 
     - cron: "*/5 * * * *"
-
-  workflow_dispatch:
 
 permissions:
 
@@ -20,11 +20,11 @@ jobs:
 
     steps:
 
-      - name: Checkout repository
+      - name: Checkout
 
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Python setup
 
         uses: actions/setup-python@v5
 
@@ -36,7 +36,7 @@ jobs:
 
         run: pip install requests beautifulsoup4
 
-      - name: Run seat monitor
+      - name: Run monitor
 
         env:
 
